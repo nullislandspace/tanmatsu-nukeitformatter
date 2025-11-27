@@ -42,41 +42,35 @@ void app_main(void) {
     // Start the GPIO interrupt service
     gpio_install_isr_service(0);
 
-    // Initialize the Non Volatile Storage partition
+    // Initialize the Non Volatile Storage service
     esp_err_t res = nvs_flash_init();
     if (res == ESP_ERR_NVS_NO_FREE_PAGES || res == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        res = nvs_flash_erase();
-        if (res != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to erase NVS flash: %d", res);
-            return;
-        }
+        ESP_ERROR_CHECK(nvs_flash_erase());
         res = nvs_flash_init();
     }
-    if (res != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize NVS flash: %d", res);
-        return;
-    }
+    ESP_ERROR_CHECK(res);
 
     // Initialize the Board Support Package
     const bsp_configuration_t bsp_configuration = {
         .display =
             {
-                .requested_color_format = LCD_COLOR_PIXEL_FORMAT_RGB888,
+                .requested_color_format = LCD_COLOR_PIXEL_FORMAT_RGB565,
                 .num_fbs                = 1,
             },
     };
-    res = bsp_device_initialize(&bsp_configuration);
-    if (res != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize BSP: %d", res);
-        return;
-    }
+
+    // Initialize the Board Support Package
+    ESP_ERROR_CHECK(bsp_device_initialize(&bsp_configuration));
+
+    uint8_t led_data[] = {
+        0xFF, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00, 0xFF,
+    };
+    bsp_led_write(led_data, sizeof(led_data));
 
     // Get display parameters and rotation
     res = bsp_display_get_parameters(&display_h_res, &display_v_res, &display_color_format, &display_data_endian);
-    if (res != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get display parameters: %d", res);
-        return;
-    }
+    ESP_ERROR_CHECK(res);  // Check that the display parameters have been initialized
+    bsp_display_rotation_t display_rotation = bsp_display_get_default_rotation();
 
     // Convert ESP-IDF color format into PAX buffer type
     pax_buf_type_t format = PAX_BUF_24_888RGB;
@@ -92,7 +86,6 @@ void app_main(void) {
     }
 
     // Convert BSP display rotation format into PAX orientation type
-    bsp_display_rotation_t display_rotation = bsp_display_get_default_rotation();
     pax_orientation_t orientation = PAX_O_UPRIGHT;
     switch (display_rotation) {
         case BSP_DISPLAY_ROTATION_90:
@@ -136,16 +129,6 @@ void app_main(void) {
 
     // Get input event queue from BSP
     ESP_ERROR_CHECK(bsp_input_get_queue(&input_event_queue));
-
-    // LEDs
-    bsp_led_set_pixel(0, 0xFF0000);  // Red
-    bsp_led_set_pixel(1, 0x00FF00);  // Green
-    bsp_led_set_pixel(2, 0x0000FF);  // Blue
-    bsp_led_set_pixel(3, 0xFFFF00);  // Yellow
-    bsp_led_set_pixel(4, 0x00FFFF);  // Magenta
-    bsp_led_set_pixel(5, 0xFF00FF);  // Cyan
-    bsp_led_send();                  // Send data to the coprocessor
-    bsp_led_set_mode(false);         // Take control over all LEDs by disabling automatic mode
 
     // Start WiFi stack (if your app does not require WiFi or BLE you can remove this section)
     pax_background(&fb, WHITE);
@@ -196,6 +179,7 @@ void app_main(void) {
     while (1) {
         bsp_input_event_t event;
         if (xQueueReceive(input_event_queue, &event, portMAX_DELAY) == pdTRUE) {
+            bsp_led_write(led_data, sizeof(led_data));
             switch (event.type) {
                 case INPUT_EVENT_TYPE_KEYBOARD: {
                     if (event.args_keyboard.ascii != '\b' ||
