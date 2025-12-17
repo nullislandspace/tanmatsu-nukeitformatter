@@ -14,8 +14,8 @@ static size_t display_h = 0;
 
 void ui_init(pax_buf_t *framebuffer) {
     fb = framebuffer;
-    display_w = pax_buf_get_width(fb);
-    display_h = pax_buf_get_height(fb);
+    display_h = pax_buf_get_width(fb);
+    display_w = pax_buf_get_height(fb);
 }
 
 void ui_blit(void) {
@@ -32,10 +32,10 @@ void ui_draw_main_menu(int selected) {
     pax_simple_rect(fb, COLOR_TEXT, 10, 45, display_w - 20, 2);
 
     // Menu items
-    const char *items[] = {"Format SD card", "Exit"};
+    const char *items[] = {"Format SD card", "Wipe SD card", "Exit"};
     int y = 70;
 
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
         pax_col_t color = (i == selected) ? COLOR_SELECT : COLOR_TEXT;
         char line[64];
         snprintf(line, sizeof(line), "%s %s", (i == selected) ? ">" : " ", items[i]);
@@ -44,12 +44,10 @@ void ui_draw_main_menu(int selected) {
     }
 
     // Instructions at bottom
-    pax_draw_text(fb, COLOR_TEXT, pax_font_sky_mono, 14, 10, display_h - 65,
-                  "Up/Down: Select");
     pax_draw_text(fb, COLOR_TEXT, pax_font_sky_mono, 14, 10, display_h - 45,
-                  "Enter/F1: Format SD card");
+                  "Up/Down: Select   Enter: Confirm");
     pax_draw_text(fb, COLOR_TEXT, pax_font_sky_mono, 14, 10, display_h - 25,
-                  "Escape: Exit to launcher");
+                  "F1: Format   F3: Wipe   ESC: Exit");
 }
 
 void ui_draw_confirm(const char *title, const char *message) {
