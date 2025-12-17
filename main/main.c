@@ -2,9 +2,6 @@
 #include "bsp/device.h"
 #include "bsp/display.h"
 #include "bsp/input.h"
-#include "bsp/led.h"
-#include "bsp/power.h"
-#include "custom_certificates.h"
 #include "driver/gpio.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_types.h"
@@ -15,28 +12,37 @@
 #include "pax_gfx.h"
 #include "pax_text.h"
 #include "portmacro.h"
-#include "wifi_connection.h"
-#include "wifi_remote.h"
+
+#include "sdcard.h"
+#include "ui.h"
 
 // Constants
 static char const TAG[] = "main";
 
+// Application states
+typedef enum {
+    STATE_INIT_ERROR,       // SD card init failed
+    STATE_MAIN_MENU,        // Main menu
+    STATE_CONFIRM_FORMAT,   // Confirm format dialog
+    STATE_CONFIRM_EXIT,     // Confirm exit dialog
+    STATE_CONFIRM_WIPE,     // Hidden: confirm wipe dialog
+    STATE_FORMATTING,       // Formatting in progress
+    STATE_WIPING,           // Wiping in progress
+    STATE_SUCCESS,          // Operation succeeded
+    STATE_ERROR,            // Operation failed
+} app_state_t;
+
 // Global variables
-static size_t                       display_h_res        = 0;
-static size_t                       display_v_res        = 0;
+static size_t display_h_res = 0;
+static size_t display_v_res = 0;
 static lcd_color_rgb_pixel_format_t display_color_format = LCD_COLOR_PIXEL_FORMAT_RGB565;
-static lcd_rgb_data_endian_t        display_data_endian  = LCD_RGB_DATA_ENDIAN_LITTLE;
-static pax_buf_t                    fb                   = {0};
-static QueueHandle_t                input_event_queue    = NULL;
+static lcd_rgb_data_endian_t display_data_endian = LCD_RGB_DATA_ENDIAN_LITTLE;
+static pax_buf_t fb = {0};
+static QueueHandle_t input_event_queue = NULL;
 
-#if defined(CONFIG_BSP_TARGET_KAMI)
-// Temporary addition for supporting epaper devices (irrelevant for Tanmatsu)
-static pax_col_t palette[] = {0xffffffff, 0xff000000, 0xffff0000};  // white, black, red
-#endif
-
-void blit(void) {
-    bsp_display_blit(0, 0, display_h_res, display_v_res, pax_buf_get_pixels(&fb));
-}
+static app_state_t app_state = STATE_MAIN_MENU;
+static int menu_selection = 0;
+static char error_message[128] = "";
 
 void app_main(void) {
     // Start the GPIO interrupt service
@@ -54,21 +60,15 @@ void app_main(void) {
     const bsp_configuration_t bsp_configuration = {
         .display =
             {
-                //.requested_color_format = LCD_COLOR_PIXEL_FORMAT_RGB565,
                 .requested_color_format = display_color_format,
-                .num_fbs                = 1,
+                .num_fbs = 1,
             },
     };
     ESP_ERROR_CHECK(bsp_device_initialize(&bsp_configuration));
 
-    uint8_t led_data[] = {
-        0xFF, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00, 0xFF,
-    };
-    bsp_led_write(led_data, sizeof(led_data));
-
     // Get display parameters and rotation
     res = bsp_display_get_parameters(&display_h_res, &display_v_res, &display_color_format, &display_data_endian);
-    ESP_ERROR_CHECK(res);  // Check that the display parameters have been initialized
+    ESP_ERROR_CHECK(res);
     bsp_display_rotation_t display_rotation = bsp_display_get_default_rotation();
 
     // Convert ESP-IDF color format into PAX buffer type
@@ -102,154 +102,225 @@ void app_main(void) {
             break;
     }
 
-        // Initialize graphics stack
-#if defined(CONFIG_BSP_TARGET_KAMI)
-    // Temporary addition for supporting epaper devices (irrelevant for Tanmatsu)
-    format = PAX_BUF_2_PAL;
-#endif
+    // Initialize graphics stack
     pax_buf_init(&fb, NULL, display_h_res, display_v_res, format);
     pax_buf_reversed(&fb, display_data_endian == LCD_RGB_DATA_ENDIAN_BIG);
-#if defined(CONFIG_BSP_TARGET_KAMI)
-    // Temporary addition for supporting epaper devices (irrelevant for Tanmatsu)
-    fb.palette      = palette;
-    fb.palette_size = sizeof(palette) / sizeof(pax_col_t);
-#endif
     pax_buf_set_orientation(&fb, orientation);
 
-#if defined(CONFIG_BSP_TARGET_KAMI)
-#define BLACK 0
-#define WHITE 1
-#define RED   2
-#else
-#define BLACK 0xFF000000
-#define WHITE 0xFFFFFFFF
-#define RED   0xFFFF0000
-#endif
+    // Initialize UI module
+    ui_init(&fb);
 
     // Get input event queue from BSP
     ESP_ERROR_CHECK(bsp_input_get_queue(&input_event_queue));
 
-    // Start WiFi stack (if your app does not require WiFi or BLE you can remove this section)
-    pax_background(&fb, WHITE);
-    pax_draw_text(&fb, BLACK, pax_font_sky_mono, 16, 0, 0, "Connecting to radio...");
-    blit();
+    // Show initializing message
+    ui_draw_wait("Initializing SD card...");
+    ui_blit();
 
-    if (wifi_remote_initialize() == ESP_OK) {
+    // Initialize SD card
+    res = sdcard_init();
+    sdcard_status_t sd_status = sdcard_get_status();
 
-        pax_background(&fb, WHITE);
-        pax_draw_text(&fb, BLACK, pax_font_sky_mono, 16, 0, 0, "Starting WiFi stack...");
-        blit();
-        wifi_connection_init_stack();  // Start the Espressif WiFi stack
-
-        pax_background(&fb, WHITE);
-        pax_draw_text(&fb, BLACK, pax_font_sky_mono, 16, 0, 0, "Connecting to WiFi network...");
-        blit();
-
-        if (wifi_connect_try_all() == ESP_OK) {
-            pax_background(&fb, WHITE);
-            pax_draw_text(&fb, BLACK, pax_font_sky_mono, 16, 0, 0, "Succesfully connected to WiFi network");
-            blit();
-        } else {
-            pax_background(&fb, RED);
-            pax_draw_text(&fb, WHITE, pax_font_sky_mono, 16, 0, 0, "Failed to connect to WiFi network");
-            blit();
-        }
+    if (sd_status == SDCARD_STATUS_NO_CARD || sd_status == SDCARD_STATUS_ERROR) {
+        // Fatal error - no card or init failed completely
+        snprintf(error_message, sizeof(error_message), "Error: %s",
+                 sd_status == SDCARD_STATUS_NO_CARD ? "No SD card detected" : "SD card initialization failed");
+        app_state = STATE_INIT_ERROR;
+        ui_draw_error("SD Card Error", error_message);
+        ui_blit();
     } else {
-        bsp_power_set_radio_state(BSP_POWER_RADIO_STATE_OFF);
-        ESP_LOGE(TAG, "WiFi radio not responding, WiFi not available");
-        pax_background(&fb, RED);
-        pax_draw_text(&fb, WHITE, pax_font_sky_mono, 16, 0, 0, "WiFi unavailable");
-        blit();
+        // Card present (mounted or mount failed due to incompatible FS)
+        app_state = STATE_MAIN_MENU;
+        menu_selection = 0;
+        ui_draw_main_menu(menu_selection);
+        ui_blit();
     }
 
-    vTaskDelay(pdMS_TO_TICKS(500));
-
-    // Main section of the app
-
-    // This example shows how to read from the BSP event queue to read input events
-
-    // If you want to run something at an interval in this same main thread you can replace portMAX_DELAY with an amount
-    // of ticks to wait, for example pdMS_TO_TICKS(1000)
-
-    pax_background(&fb, WHITE);
-    pax_draw_text(&fb, BLACK, pax_font_sky_mono, 16, 0, 0, "Welcome! Press any key to trigger an event.");
-    blit();
-
+    // Main event loop
     while (1) {
         bsp_input_event_t event;
         if (xQueueReceive(input_event_queue, &event, portMAX_DELAY) == pdTRUE) {
-            bsp_led_write(led_data, sizeof(led_data));
-            switch (event.type) {
-                case INPUT_EVENT_TYPE_KEYBOARD: {
-                    if (event.args_keyboard.ascii != '\b' ||
-                        event.args_keyboard.ascii != '\t') {  // Ignore backspace & tab keyboard events
-                        ESP_LOGI(TAG, "Keyboard event %c (%02x) %s", event.args_keyboard.ascii,
-                                 (uint8_t)event.args_keyboard.ascii, event.args_keyboard.utf8);
-                        pax_simple_rect(&fb, WHITE, 0, 0, pax_buf_get_width(&fb), 72);
-                        pax_draw_text(&fb, BLACK, pax_font_sky_mono, 16, 0, 0, "Keyboard event");
-                        char text[64];
-                        snprintf(text, sizeof(text), "ASCII:     %c (0x%02x)", event.args_keyboard.ascii,
-                                 (uint8_t)event.args_keyboard.ascii);
-                        pax_draw_text(&fb, BLACK, pax_font_sky_mono, 16, 0, 18, text);
-                        snprintf(text, sizeof(text), "UTF-8:     %s", event.args_keyboard.utf8);
-                        pax_draw_text(&fb, BLACK, pax_font_sky_mono, 16, 0, 36, text);
-                        snprintf(text, sizeof(text), "Modifiers: 0x%0" PRIX32, event.args_keyboard.modifiers);
-                        pax_draw_text(&fb, BLACK, pax_font_sky_mono, 16, 0, 54, text);
-                        blit();
-                    }
-                    break;
-                }
-                case INPUT_EVENT_TYPE_NAVIGATION: {
-                    ESP_LOGI(TAG, "Navigation event %0" PRIX32 ": %s", (uint32_t)event.args_navigation.key,
-                             event.args_navigation.state ? "pressed" : "released");
+            bool redraw = false;
 
-                    if (event.args_navigation.key == BSP_INPUT_NAVIGATION_KEY_F1) {
+            // Handle navigation events (function keys, arrows, etc.)
+            if (event.type == INPUT_EVENT_TYPE_NAVIGATION && event.args_navigation.state) {
+                switch (app_state) {
+                    case STATE_INIT_ERROR:
+                        // Any key exits to launcher
                         bsp_device_restart_to_launcher();
-                    }
-                    if (event.args_navigation.key == BSP_INPUT_NAVIGATION_KEY_F2) {
-                        bsp_input_set_backlight_brightness(0);
-                    }
-                    if (event.args_navigation.key == BSP_INPUT_NAVIGATION_KEY_F3) {
-                        bsp_input_set_backlight_brightness(100);
-                    }
+                        break;
 
-                    pax_simple_rect(&fb, WHITE, 0, 100, pax_buf_get_width(&fb), 72);
-                    pax_draw_text(&fb, BLACK, pax_font_sky_mono, 16, 0, 100 + 0, "Navigation event");
-                    char text[64];
-                    snprintf(text, sizeof(text), "Key:       0x%0" PRIX32, (uint32_t)event.args_navigation.key);
-                    pax_draw_text(&fb, BLACK, pax_font_sky_mono, 16, 0, 100 + 18, text);
-                    snprintf(text, sizeof(text), "State:     %s", event.args_navigation.state ? "pressed" : "released");
-                    pax_draw_text(&fb, BLACK, pax_font_sky_mono, 16, 0, 100 + 36, text);
-                    snprintf(text, sizeof(text), "Modifiers: 0x%0" PRIX32, event.args_navigation.modifiers);
-                    pax_draw_text(&fb, BLACK, pax_font_sky_mono, 16, 0, 100 + 54, text);
-                    blit();
-                    break;
+                    case STATE_MAIN_MENU:
+                        switch (event.args_navigation.key) {
+                            case BSP_INPUT_NAVIGATION_KEY_UP:
+                                if (menu_selection > 0) {
+                                    menu_selection--;
+                                    redraw = true;
+                                }
+                                break;
+
+                            case BSP_INPUT_NAVIGATION_KEY_DOWN:
+                                if (menu_selection < 1) {
+                                    menu_selection++;
+                                    redraw = true;
+                                }
+                                break;
+
+                            case BSP_INPUT_NAVIGATION_KEY_RETURN:
+                                if (menu_selection == 0) {
+                                    app_state = STATE_CONFIRM_FORMAT;
+                                } else {
+                                    app_state = STATE_CONFIRM_EXIT;
+                                }
+                                redraw = true;
+                                break;
+
+                            case BSP_INPUT_NAVIGATION_KEY_F1:
+                                app_state = STATE_CONFIRM_FORMAT;
+                                redraw = true;
+                                break;
+
+                            case BSP_INPUT_NAVIGATION_KEY_ESC:
+                                app_state = STATE_CONFIRM_EXIT;
+                                redraw = true;
+                                break;
+
+                            case BSP_INPUT_NAVIGATION_KEY_F3:
+                                // Hidden function: CTRL+F3 for wipe
+                                if (event.args_navigation.modifiers & BSP_INPUT_MODIFIER_CTRL) {
+                                    app_state = STATE_CONFIRM_WIPE;
+                                    redraw = true;
+                                }
+                                break;
+
+                            default:
+                                break;
+                        }
+                        break;
+
+                    case STATE_CONFIRM_FORMAT:
+                    case STATE_CONFIRM_EXIT:
+                    case STATE_CONFIRM_WIPE:
+                        if (event.args_navigation.key == BSP_INPUT_NAVIGATION_KEY_ESC) {
+                            app_state = STATE_MAIN_MENU;
+                            redraw = true;
+                        }
+                        break;
+
+                    case STATE_SUCCESS:
+                    case STATE_ERROR:
+                        // Any key returns to main menu
+                        app_state = STATE_MAIN_MENU;
+                        redraw = true;
+                        break;
+
+                    default:
+                        break;
                 }
-                case INPUT_EVENT_TYPE_ACTION: {
-                    ESP_LOGI(TAG, "Action event 0x%0" PRIX32 ": %s", (uint32_t)event.args_action.type,
-                             event.args_action.state ? "yes" : "no");
-                    pax_simple_rect(&fb, WHITE, 0, 200 + 0, pax_buf_get_width(&fb), 72);
-                    pax_draw_text(&fb, BLACK, pax_font_sky_mono, 16, 0, 200 + 0, "Action event");
-                    char text[64];
-                    snprintf(text, sizeof(text), "Type:      0x%0" PRIX32, (uint32_t)event.args_action.type);
-                    pax_draw_text(&fb, BLACK, pax_font_sky_mono, 16, 0, 200 + 36, text);
-                    snprintf(text, sizeof(text), "State:     %s", event.args_action.state ? "yes" : "no");
-                    pax_draw_text(&fb, BLACK, pax_font_sky_mono, 16, 0, 200 + 54, text);
-                    blit();
-                    break;
+            }
+
+            // Handle keyboard events (Y/N for confirmation)
+            if (event.type == INPUT_EVENT_TYPE_KEYBOARD) {
+                char key = event.args_keyboard.ascii;
+
+                switch (app_state) {
+                    case STATE_INIT_ERROR:
+                        // Any key exits to launcher
+                        bsp_device_restart_to_launcher();
+                        break;
+
+                    case STATE_CONFIRM_FORMAT:
+                        if (key == 'y' || key == 'Y') {
+                            app_state = STATE_FORMATTING;
+                            ui_draw_wait("Formatting SD card...");
+                            ui_blit();
+
+                            // Perform format
+                            res = sdcard_format();
+                            if (res == ESP_OK) {
+                                app_state = STATE_SUCCESS;
+                                ui_draw_success("SD card formatted successfully!");
+                            } else {
+                                snprintf(error_message, sizeof(error_message),
+                                         "Format failed: %s", esp_err_to_name(res));
+                                app_state = STATE_ERROR;
+                                ui_draw_error("Format Failed", error_message);
+                            }
+                            ui_blit();
+                        } else if (key == 'n' || key == 'N') {
+                            app_state = STATE_MAIN_MENU;
+                            redraw = true;
+                        }
+                        break;
+
+                    case STATE_CONFIRM_EXIT:
+                        if (key == 'y' || key == 'Y') {
+                            bsp_device_restart_to_launcher();
+                        } else if (key == 'n' || key == 'N') {
+                            app_state = STATE_MAIN_MENU;
+                            redraw = true;
+                        }
+                        break;
+
+                    case STATE_CONFIRM_WIPE:
+                        if (key == 'y' || key == 'Y') {
+                            app_state = STATE_WIPING;
+                            ui_draw_wait("Wiping first 4 blocks...");
+                            ui_blit();
+
+                            // Perform wipe (4 sectors = 2048 bytes)
+                            res = sdcard_wipe_sectors(0, 4);
+                            if (res == ESP_OK) {
+                                ESP_LOGI(TAG, "Wipe complete, returning to launcher");
+                            } else {
+                                ESP_LOGE(TAG, "Wipe failed: %s", esp_err_to_name(res));
+                            }
+                            // Exit to launcher regardless of result
+                            bsp_device_restart_to_launcher();
+                        } else if (key == 'n' || key == 'N') {
+                            app_state = STATE_MAIN_MENU;
+                            redraw = true;
+                        }
+                        break;
+
+                    case STATE_SUCCESS:
+                    case STATE_ERROR:
+                        // Any key returns to main menu
+                        app_state = STATE_MAIN_MENU;
+                        redraw = true;
+                        break;
+
+                    default:
+                        break;
                 }
-                case INPUT_EVENT_TYPE_SCANCODE: {
-                    ESP_LOGI(TAG, "Scancode event 0x%0" PRIX32, (uint32_t)event.args_scancode.scancode);
-                    pax_simple_rect(&fb, WHITE, 0, 300 + 0, pax_buf_get_width(&fb), 72);
-                    pax_draw_text(&fb, BLACK, pax_font_sky_mono, 16, 0, 300 + 0, "Scancode event");
-                    char text[64];
-                    snprintf(text, sizeof(text), "Scancode:  0x%0" PRIX32, (uint32_t)event.args_scancode.scancode);
-                    pax_draw_text(&fb, BLACK, pax_font_sky_mono, 16, 0, 300 + 36, text);
-                    blit();
-                    break;
+            }
+
+            // Redraw UI if needed
+            if (redraw) {
+                switch (app_state) {
+                    case STATE_MAIN_MENU:
+                        ui_draw_main_menu(menu_selection);
+                        break;
+
+                    case STATE_CONFIRM_FORMAT:
+                        ui_draw_confirm("Format SD Card?",
+                                        "All data will be lost!");
+                        break;
+
+                    case STATE_CONFIRM_EXIT:
+                        ui_draw_confirm("Exit to Launcher?",
+                                        "Return to the main launcher?");
+                        break;
+
+                    case STATE_CONFIRM_WIPE:
+                        ui_draw_confirm("Wipe First 4 Blocks?",
+                                        "This will erase the partition table!");
+                        break;
+
+                    default:
+                        break;
                 }
-                default:
-                    break;
+                ui_blit();
             }
         }
     }

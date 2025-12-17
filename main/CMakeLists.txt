@@ -1,12 +1,14 @@
 idf_component_register(
 	SRCS
 		"main.c"
+		"sdcard.c"
+		"ui.c"
 	PRIV_REQUIRES
 		esp_lcd
 		fatfs
 		nvs_flash
 		badge-bsp
-		tanmatsu-wifi
+		sdmmc
 	INCLUDE_DIRS
 		"."
 )
