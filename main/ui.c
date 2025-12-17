@@ -14,12 +14,14 @@ static size_t display_h = 0;
 
 void ui_init(pax_buf_t *framebuffer) {
     fb = framebuffer;
-    display_h = pax_buf_get_width(fb);
-    display_w = pax_buf_get_height(fb);
+    // Get logical dimensions for UI drawing
+    display_w = pax_buf_get_width(fb);
+    display_h = pax_buf_get_height(fb);
 }
 
 void ui_blit(void) {
-    bsp_display_blit(0, 0, display_w, display_h, pax_buf_get_pixels(fb));
+    // Swap dimensions for blit due to display rotation
+    bsp_display_blit(0, 0, display_h, display_w, pax_buf_get_pixels(fb));
 }
 
 void ui_draw_main_menu(int selected) {
