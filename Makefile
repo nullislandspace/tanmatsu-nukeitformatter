@@ -161,7 +161,7 @@ badgelink:
 .PHONY: install
 install: build
 install:
-	cd badgelink/tools; ./badgelink.sh appfs upload application "SD Card Format" 0 ../../build/tanmatsu/application.bin
+	cd badgelink/tools; ./badgelink.sh appfs upload application "Nuke-it SD Card Format" 0 ../../build/tanmatsu/application.bin
 
 .PHONY: run
 run:

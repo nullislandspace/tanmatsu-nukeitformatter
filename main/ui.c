@@ -76,13 +76,13 @@ void ui_draw_main_menu(int selected) {
     pax_background(fb, COLOR_BG);
 
     // Title
-    pax_draw_text(fb, COLOR_TEXT, pax_font_sky_mono, 24, 10, 10, "SD Card Formatter");
+    pax_draw_text(fb, COLOR_TEXT, pax_font_sky_mono, 24, 10, 10, "Nuke-it SD Card Format");
 
     // Separator line
     pax_simple_rect(fb, COLOR_TEXT, 10, 45, display_w - 20, 2);
 
     // Menu items
-    const char *items[] = {"Format SD card", "Wipe SD card", "Exit"};
+    const char *items[] = {"Format SD card", "Wipe partition table", "Exit"};
     int y = 70;
 
     for (int i = 0; i < 3; i++) {
