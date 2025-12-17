@@ -28,8 +28,9 @@ typedef enum {
     STATE_CONFIRM_WIPE,     // Hidden: confirm wipe dialog
     STATE_FORMATTING,       // Formatting in progress
     STATE_WIPING,           // Wiping in progress
-    STATE_SUCCESS,          // Operation succeeded
+    STATE_SUCCESS,          // Format succeeded - will exit to launcher
     STATE_ERROR,            // Operation failed
+    STATE_WIPE_DONE,        // Wipe complete - will exit to launcher
 } app_state_t;
 
 // Global variables
@@ -160,23 +161,24 @@ void app_main(void) {
                                 break;
 
                             case BSP_INPUT_NAVIGATION_KEY_DOWN:
-                                if (menu_selection < 1) {
+                                if (menu_selection < 2) {
                                     menu_selection++;
                                     redraw = true;
                                 }
                                 break;
 
                             case BSP_INPUT_NAVIGATION_KEY_RETURN:
-                                if (menu_selection == 0) {
-                                    app_state = STATE_CONFIRM_FORMAT;
-                                } else {
-                                    app_state = STATE_CONFIRM_EXIT;
+                                switch (menu_selection) {
+                                    case 0:
+                                        app_state = STATE_CONFIRM_FORMAT;
+                                        break;
+                                    case 1:
+                                        app_state = STATE_CONFIRM_WIPE;
+                                        break;
+                                    case 2:
+                                        app_state = STATE_CONFIRM_EXIT;
+                                        break;
                                 }
-                                redraw = true;
-                                break;
-
-                            case BSP_INPUT_NAVIGATION_KEY_F1:
-                                app_state = STATE_CONFIRM_FORMAT;
                                 redraw = true;
                                 break;
 
@@ -185,12 +187,14 @@ void app_main(void) {
                                 redraw = true;
                                 break;
 
+                            case BSP_INPUT_NAVIGATION_KEY_F1:
+                                app_state = STATE_CONFIRM_FORMAT;
+                                redraw = true;
+                                break;
+
                             case BSP_INPUT_NAVIGATION_KEY_F3:
-                                // Hidden function: CTRL+F3 for wipe
-                                if (event.args_navigation.modifiers & BSP_INPUT_MODIFIER_CTRL) {
-                                    app_state = STATE_CONFIRM_WIPE;
-                                    redraw = true;
-                                }
+                                app_state = STATE_CONFIRM_WIPE;
+                                redraw = true;
                                 break;
 
                             default:
@@ -208,6 +212,11 @@ void app_main(void) {
                         break;
 
                     case STATE_SUCCESS:
+                    case STATE_WIPE_DONE:
+                        // Any key exits to launcher
+                        bsp_device_restart_to_launcher();
+                        break;
+
                     case STATE_ERROR:
                         // Any key returns to main menu
                         app_state = STATE_MAIN_MENU;
@@ -239,7 +248,7 @@ void app_main(void) {
                             res = sdcard_format();
                             if (res == ESP_OK) {
                                 app_state = STATE_SUCCESS;
-                                ui_draw_success("SD card formatted successfully!");
+                                ui_draw_success("SD card formatted successfully!\nPress any key to exit.");
                             } else {
                                 snprintf(error_message, sizeof(error_message),
                                          "Format failed: %s", esp_err_to_name(res));
@@ -265,25 +274,36 @@ void app_main(void) {
                     case STATE_CONFIRM_WIPE:
                         if (key == 'y' || key == 'Y') {
                             app_state = STATE_WIPING;
-                            ui_draw_wait("Wiping first 4 blocks...");
+                            ui_draw_wait("Wiping partition table and boot sectors...");
                             ui_blit();
 
-                            // Perform wipe (4 sectors = 2048 bytes)
-                            res = sdcard_wipe_sectors(0, 4);
+                            // Wipe first 128 sectors (64KB) to ensure partition table,
+                            // MBR, and FAT boot sector are all destroyed
+                            res = sdcard_wipe_sectors(0, 128);
                             if (res == ESP_OK) {
-                                ESP_LOGI(TAG, "Wipe complete, returning to launcher");
+                                ESP_LOGI(TAG, "Wipe complete");
+                                ui_draw_success("SD card wiped successfully.\nCard will appear unformatted.\nPress any key to exit.");
                             } else {
                                 ESP_LOGE(TAG, "Wipe failed: %s", esp_err_to_name(res));
+                                snprintf(error_message, sizeof(error_message),
+                                         "Wipe failed: %s", esp_err_to_name(res));
+                                ui_draw_error("Wipe Failed", error_message);
                             }
-                            // Exit to launcher regardless of result
-                            bsp_device_restart_to_launcher();
+                            ui_blit();
+                            // Wait for key press then exit
+                            app_state = STATE_WIPE_DONE;
                         } else if (key == 'n' || key == 'N') {
                             app_state = STATE_MAIN_MENU;
                             redraw = true;
                         }
                         break;
 
+                    case STATE_WIPE_DONE:
                     case STATE_SUCCESS:
+                        // Any key exits to launcher
+                        bsp_device_restart_to_launcher();
+                        break;
+
                     case STATE_ERROR:
                         // Any key returns to main menu
                         app_state = STATE_MAIN_MENU;
@@ -313,8 +333,8 @@ void app_main(void) {
                         break;
 
                     case STATE_CONFIRM_WIPE:
-                        ui_draw_confirm("Wipe First 4 Blocks?",
-                                        "This will erase the partition table!");
+                        ui_draw_confirm("Wipe SD Card?",
+                                        "This will erase partition table and filesystem!");
                         break;
 
                     default:

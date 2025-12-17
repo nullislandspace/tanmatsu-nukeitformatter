@@ -21,7 +21,10 @@ static sdmmc_slot_config_t slot_config;
 esp_err_t sdcard_init(void) {
     esp_err_t ret;
 
+    ESP_LOGI(TAG, "=== Initializing SD card subsystem ===");
+
     // Initialize LDO power control for SD card
+    ESP_LOGI(TAG, "Setting up LDO power control (channel 4)...");
     sd_pwr_ctrl_ldo_config_t ldo_config = {
         .ldo_chan_id = 4,
     };
@@ -33,12 +36,14 @@ esp_err_t sdcard_init(void) {
     }
 
     // Configure SDMMC host
+    ESP_LOGI(TAG, "Configuring SDMMC host (slot 0, 40MHz)...");
     host = (sdmmc_host_t)SDMMC_HOST_DEFAULT();
     host.slot = SDMMC_HOST_SLOT_0;
     host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;  // 40MHz
     host.pwr_ctrl_handle = pwr_ctrl_handle;
 
     // Configure slot with Tanmatsu pin configuration
+    ESP_LOGI(TAG, "Configuring slot pins (CLK=43, CMD=44, D0-D3=39-42, 4-bit)...");
     slot_config = (sdmmc_slot_config_t)SDMMC_SLOT_CONFIG_DEFAULT();
     slot_config.clk = GPIO_NUM_43;
     slot_config.cmd = GPIO_NUM_44;
@@ -56,8 +61,9 @@ esp_err_t sdcard_init(void) {
         .allocation_unit_size = 16 * 1024,
     };
 
-    ESP_LOGI(TAG, "Initializing SD card...");
+    ESP_LOGI(TAG, "Attempting to mount SD card at %s...", MOUNT_POINT);
     ret = esp_vfs_fat_sdmmc_mount(MOUNT_POINT, &host, &slot_config, &mount_config, &card);
+    ESP_LOGI(TAG, "Mount result: %s (0x%x)", esp_err_to_name(ret), ret);
 
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "SD card mounted successfully");
@@ -91,14 +97,18 @@ sdcard_status_t sdcard_get_status(void) {
 esp_err_t sdcard_format(void) {
     esp_err_t ret;
 
+    ESP_LOGI(TAG, "=== Starting format operation ===");
+    ESP_LOGI(TAG, "Current status: %d, card ptr: %p", status, (void*)card);
+
     if (status == SDCARD_STATUS_MOUNTED) {
         // Card is mounted, use high-level format API
-        ESP_LOGI(TAG, "Formatting mounted SD card...");
+        ESP_LOGI(TAG, "Card is mounted, using esp_vfs_fat_sdcard_format()...");
         ret = esp_vfs_fat_sdcard_format(MOUNT_POINT, card);
+        ESP_LOGI(TAG, "Format result: %s (0x%x)", esp_err_to_name(ret), ret);
         if (ret == ESP_OK) {
-            ESP_LOGI(TAG, "Format successful");
+            ESP_LOGI(TAG, "=== Format successful ===");
         } else {
-            ESP_LOGE(TAG, "Format failed: %s", esp_err_to_name(ret));
+            ESP_LOGE(TAG, "=== Format failed ===");
         }
         return ret;
     }
@@ -106,7 +116,7 @@ esp_err_t sdcard_format(void) {
     if (status == SDCARD_STATUS_MOUNT_FAILED) {
         // Card has incompatible filesystem, mount with auto-format enabled
         // This will partition and format the card automatically
-        ESP_LOGI(TAG, "Formatting card with incompatible filesystem...");
+        ESP_LOGI(TAG, "Card has incompatible filesystem, using format_if_mount_failed...");
 
         esp_vfs_fat_sdmmc_mount_config_t mount_config = {
             .format_if_mount_failed = true,  // This triggers f_fdisk() + f_mkfs()
@@ -114,25 +124,30 @@ esp_err_t sdcard_format(void) {
             .allocation_unit_size = 16 * 1024,
         };
 
+        ESP_LOGI(TAG, "Mounting with auto-format enabled...");
         ret = esp_vfs_fat_sdmmc_mount(MOUNT_POINT, &host, &slot_config, &mount_config, &card);
+        ESP_LOGI(TAG, "Mount/format result: %s (0x%x)", esp_err_to_name(ret), ret);
 
         if (ret == ESP_OK) {
-            ESP_LOGI(TAG, "Format and mount successful");
+            ESP_LOGI(TAG, "=== Format and mount successful ===");
             sdmmc_card_print_info(stdout, card);
             status = SDCARD_STATUS_MOUNTED;
             return ESP_OK;
         }
 
-        ESP_LOGE(TAG, "Format failed: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "=== Format failed ===");
         return ret;
     }
 
-    ESP_LOGE(TAG, "Cannot format: no card or error state");
+    ESP_LOGE(TAG, "Cannot format: invalid state (status=%d)", status);
     return ESP_ERR_INVALID_STATE;
 }
 
 esp_err_t sdcard_wipe_sectors(size_t start_sector, size_t count) {
     esp_err_t ret;
+
+    ESP_LOGI(TAG, "=== Starting sector wipe ===");
+    ESP_LOGI(TAG, "Current status: %d, card ptr: %p", status, (void*)card);
 
     // Need to unmount first to write raw sectors safely
     if (status == SDCARD_STATUS_MOUNTED) {
@@ -142,30 +157,84 @@ esp_err_t sdcard_wipe_sectors(size_t start_sector, size_t count) {
             ESP_LOGE(TAG, "Failed to unmount: %s", esp_err_to_name(ret));
             return ret;
         }
+        ESP_LOGI(TAG, "Unmount successful, card ptr now: %p", (void*)card);
+        // Note: unmount deinitializes the SDMMC driver, card handle is now invalid
+        card = NULL;
     }
 
-    // If card was never initialized, we need to init the SDMMC host directly
-    if (card == NULL) {
-        ESP_LOGE(TAG, "Card not initialized");
-        return ESP_ERR_INVALID_STATE;
+    // Reinitialize SDMMC host and card for raw access (without mounting filesystem)
+    ESP_LOGI(TAG, "Reinitializing SDMMC for raw access...");
+
+    // Allocate card structure
+    static sdmmc_card_t raw_card;
+    memset(&raw_card, 0, sizeof(raw_card));
+
+    // Initialize SDMMC host
+    ESP_LOGI(TAG, "Initializing SDMMC host...");
+    ret = sdmmc_host_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to init SDMMC host: %s", esp_err_to_name(ret));
+        return ret;
     }
+
+    // Initialize slot
+    ESP_LOGI(TAG, "Initializing SDMMC slot...");
+    ret = sdmmc_host_init_slot(host.slot, &slot_config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to init SDMMC slot: %s", esp_err_to_name(ret));
+        sdmmc_host_deinit();
+        return ret;
+    }
+
+    // Initialize card
+    ESP_LOGI(TAG, "Probing SD card...");
+    ret = sdmmc_card_init(&host, &raw_card);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to init card: %s", esp_err_to_name(ret));
+        sdmmc_host_deinit();
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "Card initialized successfully");
+    ESP_LOGI(TAG, "Card sector size: %d bytes", (int)raw_card.csd.sector_size);
+    sdmmc_card_print_info(stdout, &raw_card);
 
     // Create zero buffer (aligned for DMA)
-    static uint8_t zero_buffer[512] __attribute__((aligned(4)));
+    // Use larger buffer for efficiency - write multiple sectors at once
+    #define WIPE_BUFFER_SECTORS 16
+    static uint8_t zero_buffer[512 * WIPE_BUFFER_SECTORS] __attribute__((aligned(4)));
     memset(zero_buffer, 0, sizeof(zero_buffer));
 
     ESP_LOGI(TAG, "Wiping %zu sectors starting at sector %zu", count, start_sector);
+    ESP_LOGI(TAG, "Using %d-sector buffer for writes", WIPE_BUFFER_SECTORS);
 
-    for (size_t i = 0; i < count; i++) {
-        ret = sdmmc_write_sectors(card, zero_buffer, start_sector + i, 1);
+    size_t sectors_remaining = count;
+    size_t current_sector = start_sector;
+
+    while (sectors_remaining > 0) {
+        size_t sectors_to_write = (sectors_remaining > WIPE_BUFFER_SECTORS)
+                                  ? WIPE_BUFFER_SECTORS : sectors_remaining;
+
+        ESP_LOGI(TAG, "Writing %zu sectors at sector %zu (%zu remaining)",
+                 sectors_to_write, current_sector, sectors_remaining);
+
+        ret = sdmmc_write_sectors(&raw_card, zero_buffer, current_sector, sectors_to_write);
         if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to wipe sector %zu: %s", start_sector + i, esp_err_to_name(ret));
+            ESP_LOGE(TAG, "Failed to wipe sectors at %zu: %s", current_sector, esp_err_to_name(ret));
+            sdmmc_host_deinit();
             status = SDCARD_STATUS_ERROR;
             return ret;
         }
+
+        current_sector += sectors_to_write;
+        sectors_remaining -= sectors_to_write;
     }
 
-    ESP_LOGI(TAG, "Wipe complete - %zu sectors zeroed", count);
+    ESP_LOGI(TAG, "=== Wipe complete - %zu sectors zeroed ===", count);
+
+    // Deinitialize SDMMC host
+    sdmmc_host_deinit();
+
     status = SDCARD_STATUS_MOUNT_FAILED;  // Card no longer has valid filesystem
     return ESP_OK;
 }
