@@ -7,13 +7,15 @@ endif()
 idf_component_register(
 	SRCS
 		"main.c"
+		"sdcard.c"
+		"ui.c"
 	PRIV_REQUIRES
 		esp_lcd
 		fatfs
 		nvs_flash
 		bt
 		badge-bsp
-		tanmatsu-wifi
+		sdmmc
 		${extra_requires}
 	INCLUDE_DIRS
 		"."
