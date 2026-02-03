@@ -1,5 +1,7 @@
 #include "sdcard.h"
 #include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "driver/gpio.h"
 #include "driver/sdmmc_host.h"
 #include "esp_log.h"
@@ -35,12 +37,25 @@ esp_err_t sdcard_init(void) {
         return ret;
     }
 
+    // Power cycle the SD card to ensure it's in a known state
+    // This prevents issues when the card was left in SDMMC mode from a previous session
+    ESP_LOGI(TAG, "Power cycling SD card...");
+    sd_pwr_ctrl_set_io_voltage(pwr_ctrl_handle, 0);      // Power off
+    vTaskDelay(pdMS_TO_TICKS(150));                      // Wait 150ms
+    sd_pwr_ctrl_set_io_voltage(pwr_ctrl_handle, 3300);   // Power on at 3.3V
+    vTaskDelay(pdMS_TO_TICKS(150));                      // Wait 150ms for card to stabilize
+    ESP_LOGI(TAG, "SD card power cycle complete");
+
     // Configure SDMMC host
     ESP_LOGI(TAG, "Configuring SDMMC host (slot 0, 40MHz)...");
     host = (sdmmc_host_t)SDMMC_HOST_DEFAULT();
     host.slot = SDMMC_HOST_SLOT_0;
     host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;  // 40MHz
     host.pwr_ctrl_handle = pwr_ctrl_handle;
+
+    // Allocate DMA buffer in internal RAM to avoid PSRAM cache sync overhead
+    static DRAM_DMA_ALIGNED_ATTR uint8_t dma_buf[512 * 4];  // 2KB aligned buffer
+    host.dma_aligned_buffer = dma_buf;
 
     // Configure slot with Tanmatsu pin configuration
     ESP_LOGI(TAG, "Configuring slot pins (CLK=43, CMD=44, D0-D3=39-42, 4-bit)...");
@@ -52,7 +67,6 @@ esp_err_t sdcard_init(void) {
     slot_config.d2 = GPIO_NUM_41;
     slot_config.d3 = GPIO_NUM_42;
     slot_config.width = 4;  // 4-bit mode
-    slot_config.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
 
     // Try to mount without auto-format first
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
