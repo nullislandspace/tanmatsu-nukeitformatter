@@ -67,6 +67,7 @@ esp_err_t sdcard_init(void) {
     slot_config.d2 = GPIO_NUM_41;
     slot_config.d3 = GPIO_NUM_42;
     slot_config.width = 4;  // 4-bit mode
+    slot_config.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
 
     // Try to mount without auto-format first
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
