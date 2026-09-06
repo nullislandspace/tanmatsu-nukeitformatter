@@ -1,4 +1,8 @@
 dependencies:
   idf: ">=5.5.1"
-  badgeteam/badge-bsp: "^0.8.0"
-  robotman2412/pax-gfx: "^2.0.6"
+  # Exact pins: this project is frozen on ESP-IDF 5.5.x (see idf6_sd_fuckup.md).
+  # es8156 0.1.0 dropped es8156_config_t.concurrency_semaphore, which
+  # badge-bsp 0.8.0 sets, so es8156 must stay on 0.0.3.
+  badgeteam/badge-bsp: "=0.8.0"
+  nicolaielectronics/es8156: "=0.0.3"
+  robotman2412/pax-gfx: "=2.2.2"

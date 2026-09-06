@@ -53,17 +53,25 @@ all: build
 .PHONY: badgelink
 badgelink:
 	rm -rf badgelink
-	git clone https://github.com/badgeteam/esp32-component-badgelink.git badgelink
+	#git clone https://github.com/badgeteam/esp32-component-badgelink.git badgelink
+	git clone https:///github.com/nullislandspace/esp32-component-badgelink.git badgelink
 	cd badgelink/tools; ./install.sh
+
+# Determine badgelink connection argument: --tcp for host:port, --port for serial devices
+BADGELINK_CONN := $(if $(findstring :,$(BADGELINKPORT)),--tcp $(BADGELINKPORT),--port $(BADGELINKPORT))
+
+APPFS_SLUG ?= nukeitformatter
 
 .PHONY: install
 install: build
-install:
-	cd badgelink/tools; ./badgelink.sh appfs upload nukeitformatter "Nuke-it SD Card Format" 0 ../../$(BUILD)/nukeitformatter.bin
+	@echo "=== Installing application ==="
+	@echo "Uploading nukeitformatter.bin to AppFS as $(APPFS_SLUG)..."
+	cd badgelink/tools; ./badgelink.sh $(BADGELINK_CONN) appfs upload $(APPFS_SLUG) "Nuke-it SD Card Format" 0 ../../$(BUILD)/nukeitformatter.bin
+	@echo "=== Installation complete ==="
 
 .PHONY: run
 run:
-	cd badgelink/tools; ./badgelink.sh start nukeitformatter
+	cd badgelink/tools; ./badgelink.sh $(BADGELINK_CONN) start $(APPFS_SLUG)
 
 # Preparation
 
