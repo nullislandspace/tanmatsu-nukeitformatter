@@ -1,0 +1,28 @@
+{
+    "name": "Nuke-it",
+    "description": "SD Card Formatter",
+    "categories": [
+        "tools"
+    ],
+    "version": "1.6.0",
+    "icon": {
+        "16x16": "icon16.png",
+        "32x32": "icon32.png",
+        "64x64": "icon64.png"
+    },
+    "author": "Rene cavac Schickbauer",
+    "license_type": "CC0-1.0",
+    "application": [
+        {
+            "targets": [
+                "tanmatsu",
+                "konsool"
+            ],
+            "internal_only": true,
+            "revision": 3,
+            "type": "appfs",
+            "executable": "nukeit-tanmatsu.bin",
+            "assets": []
+        }
+    ]
+}

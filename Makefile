@@ -60,18 +60,38 @@ badgelink:
 # Determine badgelink connection argument: --tcp for host:port, --port for serial devices
 BADGELINK_CONN := $(if $(findstring :,$(BADGELINKPORT)),--tcp $(BADGELINKPORT),--port $(BADGELINKPORT))
 
-APPFS_SLUG ?= nukeitformatter
+# Slug as published in the app repository.
+APP_SLUG ?= at.cavac.nukeitformatter
+APPFS_SLUG ?= $(APP_SLUG)
 
 .PHONY: install
 install: build
 	@echo "=== Installing application ==="
 	@echo "Uploading nukeitformatter.bin to AppFS as $(APPFS_SLUG)..."
-	cd badgelink/tools; ./badgelink.sh $(BADGELINK_CONN) appfs upload $(APPFS_SLUG) "Nuke-it SD Card Format" 0 ../../$(BUILD)/nukeitformatter.bin
+	cd badgelink/tools; ./badgelink.sh $(BADGELINK_CONN) appfs upload $(APPFS_SLUG) "Nuke-it" 0 ../../$(BUILD)/nukeitformatter.bin
 	@echo "=== Installation complete ==="
 
 .PHONY: run
 run:
 	cd badgelink/tools; ./badgelink.sh $(BADGELINK_CONN) start $(APPFS_SLUG)
+
+# App repository
+#
+# The repository publishes the binary as nukeit-tanmatsu.bin, which is what
+# metadata.json names as the executable, so it is renamed on the way in.
+
+APP_REPO_PATH ?= ../tanmatsu-app-repository/$(APP_SLUG)
+
+.PHONY: apprepo
+apprepo: build
+	@echo "=== Updating app repository ==="
+	mkdir -p $(APP_REPO_PATH)
+	cp metadata/metadata.json $(APP_REPO_PATH)/metadata.json
+	cp metadata/icon16.png $(APP_REPO_PATH)/icon16.png
+	cp metadata/icon32.png $(APP_REPO_PATH)/icon32.png
+	cp metadata/icon64.png $(APP_REPO_PATH)/icon64.png
+	cp $(BUILD)/nukeitformatter.bin $(APP_REPO_PATH)/nukeit-tanmatsu.bin
+	@echo "=== App repository updated at $(APP_REPO_PATH) ==="
 
 # Preparation
 
