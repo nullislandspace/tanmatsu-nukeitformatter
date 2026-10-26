@@ -57,8 +57,14 @@ badgelink:
 	git clone https:///github.com/nullislandspace/esp32-component-badgelink.git badgelink
 	cd badgelink/tools; ./install.sh
 
-# Determine badgelink connection argument: --tcp for host:port, --port for serial devices
-BADGELINK_CONN := $(if $(findstring :,$(BADGELINKPORT)),--tcp $(BADGELINKPORT),--port $(BADGELINKPORT))
+# Determine badgelink connection argument: --tcp for host:port, --port for serial
+# devices, nothing at all for raw USB (badgelink.py then uses libusb)
+# BadgeLink transport. Empty (the default) means raw USB through libusb, the
+# only thing the P4 exposes in BadgeLink mode (16d0:0f9a, vendor interface
+# ff:00:00, no CDC-ACM, so there is no /dev/ttyACM* for it). host:port
+# selects a TCP proxy, anything else a serial device.
+BADGELINKPORT ?=
+BADGELINK_CONN := $(if $(BADGELINKPORT),$(if $(findstring :,$(BADGELINKPORT)),--tcp $(BADGELINKPORT),--port $(BADGELINKPORT)),)
 
 # Slug as published in the app repository.
 APP_SLUG ?= at.cavac.nukeitformatter
